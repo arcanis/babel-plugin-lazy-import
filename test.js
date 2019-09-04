@@ -1,16 +1,38 @@
 import def, {Foo1, Bar1} from 'foobar';
 import {Foo2, Bar2} from 'foobar';
 
-export async function hello() {
+async function regularAsyncFn() {
     return Foo1;
 }
 
-export function world() {
+function regularSyncFn() {
     return Foo2;
 }
 
-export async function foo() {
-    const foo = async () => {
+async function nestedAsyncFn() {
+    const foo = () => {
         return def;
     };
+}
+
+const asyncBodyFatFn = async () => { Foo1; };
+const asyncBodylessFatFn = async () => Foo1;
+
+class MyClass {
+    async asyncMethod() {
+        return Foo1;
+    }
+}
+
+const MyObject = {
+    async asyncMethod() {
+        return Foo1;
+    }
+};
+
+async function deepNested() {
+    Foo1;
+    async function deepNested2() {
+        Bar1;
+    }
 }

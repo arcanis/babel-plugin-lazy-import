@@ -1,32 +1,35 @@
 const template = require(`@babel/template`).default;
 
 const FUNCTION_NODES = new Set([
+    `ClassMethod`,
+    `ObjectMethod`,
     `FunctionDeclaration`,
+    `ArrowFunctionExpression`,
 ]);
 
-const DYNAMIC_IMPORT = template(`const REFERENCE_NAME = (await import(IMPORT_SOURCE)).IMPORT_SPECIFIER`, {
+const DYNAMIC_IMPORT = template(`const IMPORT_TARGET = await import(IMPORT_SOURCE)`, {
     allowAwaitOutsideFunction: true,
     plugins: [`dynamicImport`],
 });
 
+const PROPERTY_ACCESS = template(`PROPERTY_SOURCE.PROPERTY_NAME`);
+
 module.exports = function ({types: t}) {
     function findAsyncPath(path) {
-        if (path === null)
-            return null;
+        let candidate = null
 
-        const scopePath = path.scope.path;
+        for (let current = path.scope.path; current !== null; current = current.parentPath)
+            if (FUNCTION_NODES.has(current.node.type) && current.node.async)
+                candidate = current;
 
-        if (FUNCTION_NODES.has(scopePath.node.type) && scopePath.node.async)
-            return scopePath;
-
-        return findAsyncPath(scopePath.parentPath);
+        return candidate;
     }
 
     return {
         visitor: {
             ImportDeclaration: {
                 enter(path, state) {
-                    const actions = [];
+                    const allRemaps = new Map();
 
                     for (const specifier of path.get(`specifiers`)) {
                         const importedIdentifierName = specifier.node.local.name;
@@ -43,19 +46,34 @@ module.exports = function ({types: t}) {
                             return;
 
                         for (const [referencePath, asyncPath] of referencesWithTheirBlocks) {
-                            actions.push([specifier, referencePath, asyncPath]);
+                            let remaps = allRemaps.get(asyncPath);
+                            if (typeof remaps === `undefined`)
+                                allRemaps.set(asyncPath, remaps = []);
+
+                            remaps.push([specifier, referencePath]);
                         }
                     }
 
-                    if (actions.length === 0)
+                    if (allRemaps.size === 0)
                         return;
 
-                    for (const [specifierPath, referencePath, asyncPath] of actions) {
+                    for (const [asyncPath, remaps] of allRemaps) {
+                        if (asyncPath.node.type === `ArrowFunctionExpression` && asyncPath.node.body.type !== `BlockStatement`)
+                            asyncPath.node.body = t.blockStatement([t.returnStatement(asyncPath.node.body)]);
+
+                        const id = path.scope.generateUidIdentifierBasedOnNode(path.node.id);
+
                         asyncPath.get(`body`).unshiftContainer(`body`, DYNAMIC_IMPORT({
-                            REFERENCE_NAME: referencePath.node,
+                            IMPORT_TARGET: id,
                             IMPORT_SOURCE: path.node.source,
-                            IMPORT_SPECIFIER: specifierPath.node.imported || t.identifier(`default`),
                         }));
+
+                        for (const [specifierPath, referencePath] of remaps) {
+                            referencePath.replaceWith(PROPERTY_ACCESS({
+                                PROPERTY_SOURCE: id,
+                                PROPERTY_NAME: specifierPath.node.imported || t.identifier(`default`),
+                            }));
+                        }
                     }
 
                     path.remove();
