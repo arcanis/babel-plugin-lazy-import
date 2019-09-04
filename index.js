@@ -1,8 +1,5 @@
 const {wrapInterop} = require(`@babel/helper-module-transforms`);
 const template = require(`@babel/template`).default;
-const {builtinModules} = require(`module`);
-
-const BUILTIN_MODULES = new Set(builtinModules);
 
 const FUNCTION_NODES = new Set([
     `ClassMethod`,
@@ -40,9 +37,6 @@ module.exports = function ({types: t}) {
             },
             ImportDeclaration: {
                 enter(path) {
-                    if (BUILTIN_MODULES.has(path.node.source.value))
-                        return;
-
                     const allRemaps = new Map();
 
                     for (const specifier of path.get(`specifiers`)) {
