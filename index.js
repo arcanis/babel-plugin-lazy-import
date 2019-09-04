@@ -94,7 +94,7 @@ module.exports = declare((api, options) => {
                             } break;
                             case `ImportDefaultSpecifier`: {
                                 dereference = PROPERTY_ACCESS({
-                                    source: wrapInterop(programPath, idRef, "default"),
+                                    SOURCE: wrapInterop(programPath, idRef, "default"),
                                     NAME: t.identifier(`default`),
                                 });
                             } break;
