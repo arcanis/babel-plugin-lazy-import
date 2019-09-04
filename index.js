@@ -1,3 +1,5 @@
+const {declare} = require(`@babel/helper-plugin-utils`);
+const pluginTransformParameters = require(`@babel/plugin-transform-parameters`).default;
 const {wrapInterop} = require(`@babel/helper-module-transforms`);
 const template = require(`@babel/template`).default;
 
@@ -9,7 +11,10 @@ const DYNAMIC_IMPORT = template.expression(`await import(SOURCE)`, {
 const CONST_DECLARATION = template.statement(`const NAME = INIT`);
 const PROPERTY_ACCESS = template.expression(`SOURCE.NAME`);
 
-module.exports = function ({types: t}) {
+module.exports = declare((api, options) => {
+    const {types: t} = api;
+    const pluginTransformParametersInstance = pluginTransformParameters(api, {});
+
     function findAsyncPath(path) {
         let candidate = null
 
@@ -67,34 +72,31 @@ module.exports = function ({types: t}) {
                         asyncPath.node.body = t.blockStatement([t.returnStatement(asyncPath.node.body)]);
 
                     const idRef = path.scope.generateUidIdentifierBasedOnNode(path.node.id);
-                    let useRef = false;
+                    let downgradeParameters = false;
 
                     const dynamicImport = DYNAMIC_IMPORT({
                         SOURCE: path.node.source,
                     });
 
                     for (const [specifierPath, referencePath] of remaps) {
-                        let source;
                         if (isInParameterList(referencePath)) {
                             source = dynamicImport;
-                        } else {
-                            source = idRef;
-                            useRef = true;
+                            downgradeParameters = true;
                         }
 
                         let dereference;
                         switch (specifierPath.node.type) {
                             case `ImportSpecifier`: {
                                 dereference = PROPERTY_ACCESS({
-                                    SOURCE: source,
+                                    SOURCE: idRef,
                                     NAME: specifierPath.node.imported || t.identifier(`default`),
                                 });
                             } break;
                             case `ImportDefaultSpecifier`: {
-                                dereference = wrapInterop(programPath, source, "default");
+                                dereference = wrapInterop(programPath, idRef, "default");
                             } break;
                             case `ImportNamespaceSpecifier`: {
-                                dereference = wrapInterop(programPath, source, "namespace");
+                                dereference = wrapInterop(programPath, idRef, "namespace");
                             } break;
                             default: {
                                 throw new Error(`Unsupported import specifier type "${specifierPath.node.type}"`);
@@ -104,16 +106,18 @@ module.exports = function ({types: t}) {
                         referencePath.replaceWith(dereference);
                     }
 
-                    if (useRef) {
-                        asyncPath.get(`body`).unshiftContainer(`body`, CONST_DECLARATION({
-                            NAME: idRef,
-                            INIT: dynamicImport,
-                        }));
+                    if (downgradeParameters) {
+                        pluginTransformParametersInstance.visitor.Function(asyncPath);
                     }
+
+                    asyncPath.get(`body`).unshiftContainer(`body`, CONST_DECLARATION({
+                        NAME: idRef,
+                        INIT: dynamicImport,
+                    }));
                 }
 
                 path.remove();
             },
         },
     };
-};
+});

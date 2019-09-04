@@ -4,6 +4,7 @@
   "dependencies": {
     "@babel/helper-module-transforms": "^7.5.5",
     "@babel/helpers": "^7.5.5",
+    "@babel/plugin-transform-parameters": "^7.4.4",
     "@babel/template": "^7.4.4"
   },
   "devDependencies": {
