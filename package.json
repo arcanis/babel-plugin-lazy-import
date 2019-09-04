@@ -8,6 +8,9 @@
     "@babel/plugin-transform-parameters": "^7.4.4",
     "@babel/template": "^7.4.4"
   },
+  "peerDependencies": {
+    "@babel/core": "^7"
+  },
   "devDependencies": {
     "@babel/cli": "^7.5.5",
     "@babel/core": "^7.5.5",
