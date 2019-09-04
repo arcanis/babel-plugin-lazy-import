@@ -1,38 +1,255 @@
-import def, {Foo1, Bar1} from 'foobar';
-import {Foo2, Bar2} from 'foobar';
+import {BaseCommand, WorkspaceRequiredError}                                   from '@yarnpkg/cli';
+import {Configuration, Cache, MessageName, Project, ReportError, StreamReport} from '@yarnpkg/core';
+import {xfs, ppath}                                                            from '@yarnpkg/fslib';
+import {parseSyml, stringifySyml}                                              from '@yarnpkg/parsers';
+import {Command}                                                               from 'clipanion';
 
-async function regularAsyncFn() {
-    return Foo1;
-}
+import foo from 'foo';
+import * as bar from 'bar';
 
-function regularSyncFn() {
-    return Foo2;
-}
+// eslint-disable-next-line arca/no-default-export
+export default class YarnCommand extends BaseCommand {
+  @Command.Boolean(`--json`)
+  json = false;
 
-async function nestedAsyncFn() {
-    const foo = () => {
-        return def;
-    };
-}
+  @Command.Boolean(`--immutable`)
+  immutable;
 
-const asyncBodyFatFn = async () => { Foo1; };
-const asyncBodylessFatFn = async () => Foo1;
+  @Command.Boolean(`--immutable-cache`)
+  immutableCache;
 
-class MyClass {
-    async asyncMethod() {
-        return Foo1;
+  @Command.Boolean(`--check-cache`)
+  checkCache = false;
+
+  @Command.Boolean(`--frozen-lockfile`)
+  frozenLockfile;
+
+  @Command.Boolean(`--inline-builds`)
+  inlineBuilds;
+
+  @Command.String(`--cache-folder`)
+  cacheFolder;
+
+  static usage = Command.Usage({
+    description: `install the project dependencies`,
+    details: `
+      This command setup your project if needed. The installation is splitted in four different steps that each have their own characteristics:
+
+      - **Resolution:** First the package manager will resolve your dependencies. The exact way a dependency version is privileged over another isn't standardized outside of the regular semver guarantees. If a package doesn't resolve to what you would expect, check that all dependencies are correctly declared (also check our website for more information: ).
+
+      - **Fetch:** Then we download all the dependencies if needed, and make sure that they're all stored within our cache (check the value of \`cache-folder\` in \`yarn config\` to see where are stored the cache files).
+
+      - **Link:** Then we send the dependency tree information to internal plugins tasked from writing them on the disk in some form (for example by generating the .pnp.js file you might know).
+
+      - **Build:** Once the dependency tree has been written on the disk, the package manager will now be free to run the build scripts for all packages that might need it, in a topological order compatible with the way they depend on one another.
+
+      Note that running this command is not part of the recommended workflow. Yarn supports zero-installs, which means that as long as you store your cache and your .pnp.js file inside your repository, everything will work without requiring any install right after cloning your repository or switching branches.
+
+      If the \`--immutable\` option is set, Yarn will abort with an error exit code if anything in the install artifacts (\`yarn.lock\`, \`.pnp.js\`, ...) was to be modified. For backward compatibility we offer an alias under the name of \`--frozen-lockfile\`, but it will be removed in a later release.
+
+      If the \`--immutable-cache\` option is set, Yarn will abort with an error exit code if the cache folder was to be modified (either because files would be added, or because they'd be removed).
+
+      If the \`--check-cache\` option is set, Yarn will always refetch the packages and will ensure that their checksum matches what's 1/ described in the lockfile 2/ inside the existing cache files (if present). This is recommended as part of your CI workflow if you're both following the Zero-Installs model and accepting PRs from third-parties, as they'd otherwise have the ability to alter the checked-in packages before submitting them.
+
+      If the \`--inline-builds\` option is set, Yarn will verbosely print the output of the build steps of your dependencies (instead of writing them into individual files). This is likely useful mostly for debug purposes only when using Docker-like environments.
+
+      If the \`--json\` flag is set the output will follow a JSON-stream output also known as NDJSON (https://github.com/ndjson/ndjson-spec).
+    `,
+    examples: [[
+      `Install the project`,
+      `yarn install`,
+    ], [
+      `Validate a project when using Zero-Installs`,
+      `yarn install --immutable --immutable-cache`,
+    ], [
+      `Validate a project when using Zero-Installs (slightly safer if you accept external PRs)`,
+      `yarn install --immutable --immutable-cache --check-cache`,
+    ]],
+  });
+
+  @Command.Path()
+  @Command.Path(`install`)
+    async execute() {
+        foo;
+        bar;
+    const configuration = await Configuration.find(this.context.cwd, this.context.plugins);
+
+    // We want to prevent people from using --frozen-lockfile
+    // Note: it's been deprecated because we're now locking more than just the
+    // lockfile - for example the PnP artifacts will also be locked.
+    if (typeof this.frozenLockfile !== `undefined`) {
+      const frozenLockfileReport = await StreamReport.start({
+        configuration,
+        stdout: this.context.stdout,
+        includeFooter: false,
+      }, async report => {
+        report.reportWarning(MessageName.DEPRECATED_CLI_SETTINGS, `The --frozen-lockfile option is deprecated; use --immutable and/or --immutable-cache instead`);
+      });
+
+      if (frozenLockfileReport.hasErrors()) {
+        return frozenLockfileReport.exitCode();
+      }
     }
+
+    // We also want to prevent them from using --cache-folder
+    // Note: it's been deprecated because the cache folder should be set from
+    // the settings. Otherwise there would be a very high chance that multiple
+    // Yarn commands would use different caches, causing unexpected behaviors.
+    if (this.cacheFolder != null) {
+      const cacheFolderReport = await StreamReport.start({
+        configuration,
+        stdout: this.context.stdout,
+        includeFooter: false,
+      }, async report => {
+        if (process.env.NETLIFY) {
+          report.reportWarning(MessageName.DEPRECATED_CLI_SETTINGS, `Netlify is trying to set a cache folder, ignoring!`);
+        } else {
+          report.reportError(MessageName.DEPRECATED_CLI_SETTINGS, `The cache-folder option has been deprecated; use rc settings instead`);
+        }
+      });
+
+      if (cacheFolderReport.hasErrors()) {
+        return cacheFolderReport.exitCode();
+      }
+    }
+
+    const immutable = typeof this.immutable === `undefined` && typeof this.frozenLockfile === `undefined`
+      ? configuration.get(`enableImmutableInstalls`)
+      : this.immutable || this.frozenLockfile;
+
+    if (configuration.projectCwd !== null) {
+      const fixReport = await StreamReport.start({
+        configuration,
+        json: this.json,
+        stdout: this.context.stdout,
+        includeFooter: false,
+      }, async report => {
+        if (await autofixMergeConflicts(configuration, immutable)) {
+          report.reportInfo(MessageName.AUTOMERGE_SUCCESS, `Automatically fixed merge conflicts 👍`);
+        }
+      });
+
+      if (fixReport.hasErrors()) {
+        return fixReport.exitCode();
+      }
+    }
+
+    const {project, workspace} = await Project.find(configuration, this.context.cwd);
+    const cache = await Cache.find(configuration, {immutable: this.immutableCache, check: this.checkCache});
+
+    if (!workspace)
+      throw new WorkspaceRequiredError(this.context.cwd);
+
+    // Important: Because other commands also need to run installs, if you
+    // get in a situation where you need to change this file in order to
+    // customize the install it's very likely you're doing something wrong.
+    // This file should stay super super simple, and the configuration and
+    // install logic should be implemented elsewhere (probably in either of
+    // the Configuration and Install classes). Feel free to open an issue
+    // in order to ask for design feedback before writing features.
+
+    const report = await StreamReport.start({
+      configuration,
+      json: this.json,
+      stdout: this.context.stdout,
+      includeLogs: true,
+    }, async report => {
+      await project.install({cache, report, immutable, inlineBuilds: this.inlineBuilds});
+    });
+
+    return report.exitCode();
+  }
 }
 
-const MyObject = {
-    async asyncMethod() {
-        return Foo1;
-    }
-};
+const MERGE_CONFLICT_ANCESTOR = `|||||||`;
+const MERGE_CONFLICT_END = `>>>>>>>`;
+const MERGE_CONFLICT_SEP = `=======`;
+const MERGE_CONFLICT_START = `<<<<<<<`;
 
-async function deepNested() {
-    Foo1;
-    async function deepNested2() {
-        Bar1;
+async function autofixMergeConflicts(configuration, immutable) {
+  if (!configuration.projectCwd)
+    return false;
+
+  const lockfilePath = ppath.join(configuration.projectCwd, configuration.get(`lockfileFilename`));
+  if (!await xfs.existsPromise(lockfilePath))
+    return false;
+
+  const file = await xfs.readFilePromise(lockfilePath, `utf8`);
+  if (!file.includes(MERGE_CONFLICT_START))
+    return false;
+
+  if (immutable)
+    throw new ReportError(MessageName.AUTOMERGE_IMMUTABLE, `Cannot autofix a lockfile when running an immutable install`);
+
+  const [left, right] = getVariants(file);
+
+  let parsedLeft;
+  let parsedRight;
+
+  try {
+    parsedLeft = parseSyml(left);
+    parsedRight = parseSyml(right);
+  } catch (error) {
+    throw new ReportError(MessageName.AUTOMERGE_FAILED_TO_PARSE, `The individual variants of the lockfile failed to parse`);
+  }
+
+  const merged = Object.assign({}, parsedLeft, parsedRight);
+  const serialized = stringifySyml(merged);
+
+  await xfs.changeFilePromise(lockfilePath, serialized);
+
+  return true;
+}
+
+function getVariants(file) {
+  const variants = [[], []];
+  const lines = file.split(/\r?\n/g);
+
+  let skip = false;
+
+  while (lines.length > 0) {
+    const line = lines.shift();
+    if (typeof line === `undefined`)
+      throw new Error(`Assertion failed: Some lines should remain`);
+
+    if (line.startsWith(MERGE_CONFLICT_START)) {
+      // get the first variant
+      while (lines.length > 0) {
+        const conflictLine = lines.shift();
+        if (typeof conflictLine === `undefined`)
+          throw new Error(`Assertion failed: Some lines should remain`);
+
+        if (conflictLine === MERGE_CONFLICT_SEP) {
+          skip = false;
+          break;
+        } else if (skip || conflictLine.startsWith(MERGE_CONFLICT_ANCESTOR)) {
+          skip = true;
+          continue;
+        } else {
+          variants[0].push(conflictLine);
+        }
+      }
+
+      // get the second variant
+      while (lines.length > 0) {
+        const conflictLine = lines.shift();
+        if (typeof conflictLine === `undefined`)
+          throw new Error(`Assertion failed: Some lines should remain`);
+
+        if (conflictLine.startsWith(MERGE_CONFLICT_END)) {
+          break;
+        } else {
+          variants[1].push(conflictLine);
+        }
+      }
+    } else {
+      variants[0].push(line);
+      variants[1].push(line);
     }
+  }
+
+  return [
+    variants[0].join(`\n`),
+    variants[1].join(`\n`),
+  ];
 }

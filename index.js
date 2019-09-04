@@ -1,4 +1,8 @@
+const {wrapInterop} = require(`@babel/helper-module-transforms`);
 const template = require(`@babel/template`).default;
+const {builtinModules} = require(`module`);
+
+const BUILTIN_MODULES = new Set(builtinModules);
 
 const FUNCTION_NODES = new Set([
     `ClassMethod`,
@@ -25,10 +29,20 @@ module.exports = function ({types: t}) {
         return candidate;
     }
 
+    let programPath;
+
     return {
         visitor: {
+            Program: {
+                enter(path) {
+                    programPath = path;
+                },
+            },
             ImportDeclaration: {
-                enter(path, state) {
+                enter(path) {
+                    if (BUILTIN_MODULES.has(path.node.source.value))
+                        return;
+
                     const allRemaps = new Map();
 
                     for (const specifier of path.get(`specifiers`)) {
@@ -69,10 +83,27 @@ module.exports = function ({types: t}) {
                         }));
 
                         for (const [specifierPath, referencePath] of remaps) {
-                            referencePath.replaceWith(PROPERTY_ACCESS({
-                                PROPERTY_SOURCE: id,
-                                PROPERTY_NAME: specifierPath.node.imported || t.identifier(`default`),
-                            }));
+                            let source;
+
+                            switch (specifierPath.node.type) {
+                                case `ImportSpecifier`: {
+                                    source = PROPERTY_ACCESS({
+                                        PROPERTY_SOURCE: id,
+                                        PROPERTY_NAME: specifierPath.node.imported || t.identifier(`default`),
+                                    });
+                                } break;
+                                case `ImportDefaultSpecifier`: {
+                                    source = wrapInterop(programPath, id, "default");
+                                } break;
+                                case `ImportNamespaceSpecifier`: {
+                                    source = wrapInterop(programPath, id, "namespace");
+                                } break;
+                                default: {
+                                    throw new Error(`Unsupported import specifier type "${specifierPath.node.type}"`);
+                                } break;
+                            }
+
+                            referencePath.replaceWith(source);
                         }
                     }
 
