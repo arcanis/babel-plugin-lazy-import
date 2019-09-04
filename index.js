@@ -89,11 +89,14 @@ module.exports = declare((api, options) => {
                             case `ImportSpecifier`: {
                                 dereference = PROPERTY_ACCESS({
                                     SOURCE: idRef,
-                                    NAME: specifierPath.node.imported || t.identifier(`default`),
+                                    NAME: specifierPath.node.imported,
                                 });
                             } break;
                             case `ImportDefaultSpecifier`: {
-                                dereference = wrapInterop(programPath, idRef, "default");
+                                dereference = PROPERTY_ACCESS({
+                                    source: wrapInterop(programPath, idRef, "default"),
+                                    NAME: t.identifier(`default`),
+                                });
                             } break;
                             case `ImportNamespaceSpecifier`: {
                                 dereference = wrapInterop(programPath, idRef, "namespace");
